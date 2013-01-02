@@ -39,6 +39,9 @@ sample_time_every = 20
 # sample size to be computed from.
 sample_history_size = 150
 
+# How often should we readjust the beat detection's zero point?
+beat_phase_every = 10
+
 # Some ongoing state. The current estimate of the sample
 # frequency:
 sample_freq = None
@@ -50,10 +53,11 @@ current_sample_num = 0
 history_time = [] # current time every sample_time_every samples
 history_acc = [] # last sample_history_size accelerometer values
 history_f0 = [0.0 for i in xrange(4)] # computed frequencies
-history_phase = [0.0 for i in xrange(5)] # computed phases
+history_phase = [0.0 for i in xrange(10)] # computed phases
 
 # For predicting beats, the last beat predicted so that we don't
 # predict another beat again right away.
+phase_at_zero = 0
 last_beat = 0
 
 while True:
@@ -156,31 +160,27 @@ while True:
 	# Print the fundamental frequency and the 'average' acceleration.
 	print f0, s[0]
 	
-	# We can also predict the next beat by getting the phase of the
-	# beat at the current time and projecting forward based on the
-	# computed period, i.e. the inverse of the fundamental frequency.
-
-	# This gets the current phase in radians in the range [-pi,pi].
-	phase = numpy.angle(FFT[f0_i])
+	samples_per_beat = int(round(sample_freq / f0))
+	if (current_sample_num % beat_phase_every) == 0:
+		# We can also predict the next beat by getting the phase of the
+		# beat at the current time and projecting forward based on the
+		# computed period, i.e. the inverse of the fundamental frequency.
 	
-	# Predict the time of the next beat, in terms of the number of
-	# samples from now.
-	samples_per_beat = (sample_freq / f0)
-	sample_of_next_beat = current_sample_num + (numpy.pi - phase)/(2*numpy.pi) * samples_per_beat
+		# This gets the current phase in radians in the range [-pi,pi].
+		phase = numpy.angle(FFT[f0_i])
+		
+		# If there are X samples in a beat, what phase was sample 0
+		# in the range of [0,X)?
+		phase_now = int(round( (phase + numpy.pi/2)/(2*numpy.pi) * samples_per_beat ))
+		phase_at_zero = (phase_now - current_sample_num) % samples_per_beat
+		
+		# The phase is very wobbly over time, so we need to smooth it.
+		history_phase.append(phase_at_zero)
+		history_phase.pop(0)
+		phase_at_zero = int(numpy.median(history_phase))
 	
-	# The phase is very wobbly over time, so we need to smooth it.
-	# Add this prediction to a history, and get the predicted next
-	# beat as the median. Exclude the current prediction because if
-	# we are supposed to beat now, the current prediction might
-	# jump to the next beat before we actually issue the beat.
-	history_phase.append(sample_of_next_beat)
-	history_phase.pop(0)
-	sample_of_next_beat = numpy.median(history_phase[:-1])
-	
-	# Should we beat now? Only if we're past (but not too far past)
-	# a predicted beat time, and if we're not too close to the
-	# last beat.
-	if sample_of_next_beat <= current_sample_num <= sample_of_next_beat+.2*samples_per_beat \
+	# Should we beat now? Just prevent two beats close together.
+	if (current_sample_num % samples_per_beat) == 0 \
 	  and current_sample_num > last_beat + .8*samples_per_beat:
 		print "BEAT!"
 		last_beat = current_sample_num
